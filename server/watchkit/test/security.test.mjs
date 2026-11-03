@@ -14,7 +14,6 @@ test('example binds loopback and limits file roots to explicit opt-in config', (
   assert.deepEqual(example.img_roots, []);
   assert.equal(example.enable_media, false);
   assert.equal(example.enable_stt, false);
-  assert.equal(example.enable_mermaid, false);
 });
 
 test('server rejects public binds, weak/missing bearer tokens and query-string tokens', () => {
@@ -34,7 +33,7 @@ test('pilot denies state mutation and expensive optional helper routes by defaul
   assert.match(server, /PILOT_READ_ONLY_DENY/);
   assert.match(server, /cfg\.enable_media/);
   assert.match(server, /cfg\.enable_stt/);
-  assert.match(server, /cfg\.enable_mermaid/);
+  assert.doesNotMatch(server, /enable_mermaid|handleRender/);
   assert.match(server, /const IMG_ROOTS = \(Array\.isArray\(cfg\.img_roots\)/);
   assert.doesNotMatch(server, /IMG_ROOTS = \[os\.homedir\(\), '\/tmp'/);
   assert.doesNotMatch(server, /runChild\(['"]npx['"],\s*\[['"]-y['"],\s*['"]@mermaid-js/);

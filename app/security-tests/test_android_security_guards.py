@@ -30,6 +30,12 @@ class AndroidSecurityGuards(unittest.TestCase):
         self.assertIn("requireSafeGatewayUrl", source)
         self.assertIn("https", source)
 
+    def test_snapshot_push_validates_gateway_before_building_authenticated_request(self):
+        source = (ROOT / "app/src/main/java/dev/hermes/wearos/net/SnapshotPusher.kt").read_text()
+        validation = source.index("TailnetRoute.requireSafeGatewayUrl")
+        request = source.index("val req = Request.Builder()")
+        self.assertLess(validation, request)
+
     def test_sensitive_preferences_are_encrypted(self):
         source = (ROOT / "app/src/main/java/dev/hermes/wearos/data/AppSettings.kt").read_text()
         for key in ("KEY_TOKEN", "KEY_WATCHKIT_TOKEN", "KEY_TAILNET_KEY", "KEY_AGENTS_CACHE"):

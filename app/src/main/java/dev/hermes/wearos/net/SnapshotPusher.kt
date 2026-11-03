@@ -112,8 +112,10 @@ class SnapshotPusher(
             if (cfg.token.isEmpty()) return record("skipped · watchkit token unset (Settings/adb)")
             val now = System.currentTimeMillis()
             val body = BodySnapshot.buildJson(now, chatActive = false, t, locationValues(t, reason))
+            val url = "${cfg.baseUrl}/health/snapshot"
+            TailnetRoute.requireSafeGatewayUrl(url)
             val req = Request.Builder()
-                .url("${cfg.baseUrl}/health/snapshot")
+                .url(url)
                 .post(body.toRequestBody(JSON))
                 .header("Authorization", "Bearer ${cfg.token}")
                 .build()

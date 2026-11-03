@@ -1341,7 +1341,7 @@ const server = http.createServer(async (req, res) => {
       catch (e) { return done(res, sendErr(res, e.status || 400, e.status ? 'body >1MB' : 'invalid JSON body'), Date.now(), ip, 'img', e.status || 400); }
       return await handleImg(req, res, ip, body && typeof body === 'object' ? body : {});
     }
-    if (req.method === 'POST' && url === '/render/mermaid') return cfg.enable_mermaid === true ? await handleRender(req, res, ip) : sendErr(res, 403, 'disabled');
+    if (req.method === 'POST' && url === '/render/mermaid') return sendErr(res, 403, 'disabled');
     if (req.method === 'POST' && url === '/stt/whisper') return cfg.enable_stt === true ? await handleStt(req, res, ip) : sendErr(res, 403, 'disabled');
     return done(res, sendErr(res, 404, 'not found'), Date.now(), ip, url.slice(1), 404);
   } catch (e) {

@@ -79,3 +79,21 @@ test('runtime authentication and disabled privilege routes fail closed without p
     assert.deepEqual(await fs.readdir(f.home), [], 'helper must never seed or inspect production profile env files');
   } finally { await f.clean(); }
 });
+
+test('runtime denies Mermaid rendering even when explicitly enabled', async () => {
+  const port = await freePort();
+  const f = await fixture({ host: '127.0.0.1', port, token, enable_mermaid: true });
+  const url = `http://127.0.0.1:${port}`;
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  try {
+    let ready = false;
+    for (let n = 0; n < 60; n++) {
+      if (f.child.exitCode !== null) assert.fail(f.output());
+      try { const r = await fetch(`${url}/health`); if (r.status === 200) { ready = true; break; } } catch {}
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.ok(ready, f.output());
+    const response = await fetch(`${url}/render/mermaid`, { method: 'POST', headers, body: JSON.stringify({ code: 'flowchart TD\\nA-->B' }) });
+    assert.equal(response.status, 403);
+  } finally { await f.clean(); }
+});
