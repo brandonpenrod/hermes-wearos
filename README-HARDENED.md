@@ -39,6 +39,10 @@ Download artifacts only from a successful workflow for the reviewed commit. Veri
 
 Revoke the pilot API credential and remove/disable the watch's tailnet node to cut access. Stop only the isolated pilot backend. Uninstalling the test app removes its app-managed settings/transcripts/Keystore alias according to Android behavior; confirm on the actual device. Never rotate the main Walter token merely to remove this pilot. No production data should have entered the pilot.
 
+## Known disabled features
+
+Mermaid rendering is intentionally unavailable in the hardened pilot, including when legacy configuration requests it. The initial pilot also excludes all helper, body snapshot and location features. Do not re-enable them merely to match upstream screenshots.
+
 ## Residual risks
 
 The watch is a client to an agent capable of actions; a lost unlocked device or compromised client can exercise whatever the pilot credential permits. Android OS storage protections and Keystore encryption do not protect plaintext while the authorized app is running. Tailnet identity state is managed by tsnet, separately from app settings encryption. Dependencies are pinned but not exhaustively audited. External links/media, vendor STT/TTS engines and optional helper features have separate privacy boundaries. Do not enable optional helper features until their exact scope, transport and resources are reviewed.
