@@ -3,7 +3,6 @@ package dev.hermes.wearos.notify
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import dev.hermes.wearos.WearApp
 
 /**
@@ -21,11 +20,9 @@ class ApprovalNotificationReceiver : BroadcastReceiver() {
         val action = intent.getStringExtra(Notifs.EXTRA_ACTION) ?: intent.action ?: ""
         if (runId.isEmpty()) return
         val approve = action == Notifs.ACTION_APPROVE
-        Log.i(TAG, "approval action $action run=$runId")
         Notifs.cancelApproval(context, runId)
         val pending = goAsync()
         WearApp.Graph.session.respondApprovalFromNotification(runId, approve) { pending.finish() }
     }
 
-    private companion object { const val TAG = "HermesWear" }
 }

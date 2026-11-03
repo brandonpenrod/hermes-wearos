@@ -527,8 +527,10 @@ object Watchkit {
         }
     }
 
-    private inline fun <T> clientCall(req: Request, crossinline block: (okhttp3.Response) -> T): T =
-        HermesApi.DEFAULT.newCall(req).execute().use { block(it) }
+    private inline fun <T> clientCall(req: Request, crossinline block: (okhttp3.Response) -> T): T {
+        TailnetRoute.requireSafeGatewayUrl(req.url.toString())
+        return HermesApi.DEFAULT.newCall(req).execute().use { block(it) }
+    }
 }
 
 /** One catalog row from watchkit `GET /catalog` (SPEC §12.3); `honored`/`group` are the

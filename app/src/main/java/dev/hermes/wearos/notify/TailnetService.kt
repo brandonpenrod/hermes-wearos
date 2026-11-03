@@ -73,7 +73,7 @@ class TailnetService : Service() {
             val enabled = settings.tailnetEnabled()
             val key = settings.tailnetKey()
             if (!enabled || key.isBlank()) {
-                Log.i(TAG, "tailnet service: ${if (!enabled) "disabled" else "no key"} — direct mode")
+                // A missing/disabled tailnet is an offline state, never permission for direct sockets.
                 TailnetEngine.stop()
                 TailnetRoute.socksPort = 0
                 shutdown()
