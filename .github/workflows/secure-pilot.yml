@@ -2,7 +2,6 @@ name: Secure pilot verification
 on:
   push:
     branches: [harden/secure-pilot]
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -23,6 +22,7 @@ jobs:
         with:
           go-version-file: tailnet/go/go.mod
           cache-dependency-path: tailnet/go/go.sum
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
       - name: Install Android build dependencies
         run: |
           sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'
