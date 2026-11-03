@@ -155,7 +155,6 @@ object BodyTools {
             "available · vendor type $spo2Type" + (spo2?.let { " · latest=${it.first} @${it.second}" } ?: "")
         else "unavailable · OXYGEN_SATURATION not exposed here (verify at M4)"
         _status.value = out
-        out.forEach { (k, v) -> Log.i(TAG, "bodytools status: $k -> $v") }
         return out
     }
 
@@ -179,7 +178,7 @@ object BodyTools {
                 .getOrNull()
                 ?: hrTypeRef?.takeIf { it != DataType.HEART_RATE_BPM }
                     ?.let { ingestGeneric(container, it) }?.first
-            hrV?.let { v -> hr = v to now; Log.d(TAG, "bodytools hr=$v ($source)") }
+            hrV?.let { v -> hr = v to now }
             val stepsV = runCatching { container.getData(DataType.STEPS_TOTAL) }
                 .getOrNull()?.total?.toDouble()
                 ?: stepsTypeRef?.takeIf { it != DataType.STEPS_TOTAL }
@@ -188,14 +187,12 @@ object BodyTools {
                 // Day-boundary aware: a total whose window starts today is "steps today";
                 // a wider window is reported as-is (monotonic device counter).
                 steps = total.toLong() to now
-                Log.d(TAG, "bodytools steps=$total ($source)")
             }
-            spo2Type?.let { dt -> ingestGeneric(container, dt)?.let { spo2 = it; Log.d(TAG, "bodytools spo2=${it.first} ($source)") } }
+            spo2Type?.let { dt -> ingestGeneric(container, dt)?.let { spo2 = it } }
             sleepType?.let { dt -> ingestGeneric(container, dt)?.let {
                 val end = now
                 // Value is minutes in bed on devices that expose sleep; window = minutes before now.
                 sleepSession = SleepWindow((end - it.first * 60_000).toLong().coerceAtMost(end), end, now)
-                Log.d(TAG, "bodytools sleep value=${it.first} ($source)")
             } }
         } catch (e: Exception) {
             Log.w(TAG, "bodytools ingest failed ($source): ${e.message}")

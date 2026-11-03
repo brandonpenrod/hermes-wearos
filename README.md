@@ -1,4 +1,8 @@
-# Hermes Wear OS
+# Hermes Wear OS — hardened test fork
+
+> **Start with [README-HARDENED.md](README-HARDENED.md).** This is an experimental security fork, not the official Nous app. The upstream automatic install instructions below are NOT supported for this fork. Never run them against production Hermes or your watch. Only install an artifact after its exact source commit passes the security review/build gates; physical Watch7 testing remains required.
+
+## Upstream documentation (historical; features and defaults may be disabled below)
 
 **Your Wear OS watch talks directly to your own AI gateway.** No phone companion, no cloud relay, no
 Telegram in the middle. Tap the orb, say a thing, and a real agent on your own box — with real tools,

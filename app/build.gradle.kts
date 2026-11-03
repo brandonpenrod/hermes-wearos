@@ -53,6 +53,8 @@ dependencies {
     implementation(libs.androidx.splashscreen)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
+    // androidx.wear pulls an obsolete Fragment; ActivityResult permission APIs require >=1.3.0.
+    implementation("androidx.fragment:fragment:1.8.5")
     implementation(libs.androidx.wear)
     implementation(libs.androidx.wear.compose.material)
     implementation(libs.androidx.wear.compose.foundation)

@@ -1,6 +1,11 @@
 {
-  "host": "0.0.0.0",
+  "host": "127.0.0.1",
   "port": 42651,
-  "token": "REPLACE-with: openssl rand -hex 32",
-  "img_roots": ["/home/USER/.hermes", "/home/USER/dev", "/tmp", "/var/tmp"]
+  "token": "REPLACE-with-64-hex-chars-from-openssl-rand-hex-32",
+  "profile_dir": "",
+  "img_roots": [],
+  "enable_images": false,
+  "enable_media": false,
+  "enable_mermaid": false,
+  "enable_stt": false
 }

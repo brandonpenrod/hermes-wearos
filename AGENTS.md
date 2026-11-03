@@ -1,4 +1,8 @@
-# AGENTS.md — install this repo from an agent
+# HARDENED FORK: DO NOT FOLLOW THE LEGACY INSTALL CONTRACT BELOW
+
+Read README-HARDENED.md and docs/plans/secure-pilot.md first. The remainder of this file is retained only as upstream historical context; it does NOT authorize installation, credential reads/copying, profile edits, SOUL.md replacement, service restarts, device idle changes, or enabling debug receivers. No live backend/watch changes without separate owner approval. Use synthetic test fixtures only. Rebuild the networking AAR from pinned source for test artifacts. Never commit credentials or signing keys. This is a security-hardening pilot, not certified production software.
+
+# Upstream historical AGENTS.md — NOT an installation procedure for this fork
 
 You (an AI agent) can take this repo from clone to a working watch conversation. Follow this
 file top to bottom; only interview the human for what you genuinely cannot detect (§4).

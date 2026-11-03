@@ -196,14 +196,29 @@ class ChatStore(private val settings: AppSettings, private val appContext: Conte
         val f = transcriptFile(id)
         if (!f.exists()) return emptyList()
         return try {
-            val msgs = json.decodeFromString(msgList, f.readText()).map {
+            val stored = f.readText()
+            val payload = if (DeviceSecretBox.isEncrypted(stored)) {
+                DeviceSecretBox.decrypt(stored)
+            } else {
+                // Migrate the complete legacy plaintext transcript before parsing; never drop it on a key error.
+                val encrypted = DeviceSecretBox.encrypt(stored)
+                val tmp = File(f.parentFile, "${f.name}.secure.tmp")
+                tmp.writeText(encrypted)
+                java.nio.file.Files.move(
+                    tmp.toPath(), f.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                )
+                stored
+            }
+            val msgs = json.decodeFromString(msgList, payload).map {
                 ChatMessage(it.id, runCatching { ChatMessage.Role.valueOf(it.role) }.getOrDefault(ChatMessage.Role.System), it.text)
             }
             Log.i(TAG, "loaded transcript id=$id n=${msgs.size}")
             msgs
         } catch (e: Exception) {
-            Log.w(TAG, "transcript load failed id=$id", e)
-            emptyList()
+            Log.w(TAG, "transcript load/encryption failed id=$id; stored data retained", e)
+            throw e
         }
     }
 
@@ -218,7 +233,7 @@ class ChatStore(private val settings: AppSettings, private val appContext: Conte
             try {
                 val dir = File(appContext.filesDir, "transcripts").apply { mkdirs() }
                 val tmp = File(dir, "$id.json.tmp")
-                tmp.writeText(payload)
+                tmp.writeText(DeviceSecretBox.encrypt(payload))
                 val dst = File(dir, "$id.json")
                 if (!tmp.renameTo(dst)) tmp.copyTo(dst, overwrite = true)
                 tmp.delete()

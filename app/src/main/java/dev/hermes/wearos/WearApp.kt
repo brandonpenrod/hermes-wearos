@@ -11,7 +11,6 @@ import dev.hermes.wearos.domain.AwayWatch
 import dev.hermes.wearos.domain.SweepCursor
 import dev.hermes.wearos.domain.ChatSession
 import dev.hermes.wearos.domain.ProfileLogic
-import dev.hermes.wearos.health.BodySnapshot
 import dev.hermes.wearos.health.BodyTools
 import dev.hermes.wearos.location.LocationTool
 import dev.hermes.wearos.notify.Attention
@@ -21,6 +20,7 @@ import dev.hermes.wearos.net.HermesApi
 import dev.hermes.wearos.net.EndpointResolver
 import dev.hermes.wearos.net.NetworkMonitor
 import dev.hermes.wearos.net.TailnetEngine
+import dev.hermes.wearos.net.TailnetRoute
 import dev.hermes.wearos.domain.TailnetLogic
 import dev.hermes.wearos.domain.TailnetPhase
 import dev.hermes.wearos.net.SnapshotPusher
@@ -42,6 +42,8 @@ import kotlinx.coroutines.plus
 class WearApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // Install the tailnet-only selector process-wide before any HTTP stack can dial.
+        java.net.ProxySelector.setDefault(TailnetRoute.SELECTOR)
         Graph.init(this)
     }
 
@@ -713,19 +715,11 @@ class WearApp : Application() {
             }.start()
         }
 
-        /** Dev-only (adb `-e body_status`): Health Services probe; per-tool results in logcat. */
+        /** Dev-only (adb `-e body_status`): probe Health Services without logging measurements. */
         fun devBodyStatus() {
             Thread {
-                val st = kotlinx.coroutines.runBlocking { BodyTools.probe() }
-                android.util.Log.i("HermesWear", "body_status ── health services ──")
-                st.forEach { (k, v) -> android.util.Log.i("HermesWear", "body_status $k -> $v") }
-                val snap = kotlinx.coroutines.runBlocking {
-                    BodySnapshot.buildJson(
-                        System.currentTimeMillis(), chatActive = false,
-                        BodySnapshot.Toggles(true, true, true, true, true), BodyTools.values(),
-                    )
-                }
-                android.util.Log.i("HermesWear", "body_status snapshot(if all on) $snap")
+                kotlinx.coroutines.runBlocking { BodyTools.probe() }
+                android.util.Log.i("HermesWear", "body_status probe completed; measurements omitted from logs")
             }.start()
         }
 

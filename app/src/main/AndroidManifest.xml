@@ -84,7 +84,7 @@
         <!-- M5: inline Approve/Deny from the approval notification (also adb-testable). -->
         <receiver
             android:name=".notify.ApprovalNotificationReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="dev.hermes.wearos.APPROVE" />
                 <action android:name="dev.hermes.wearos.DENY" />

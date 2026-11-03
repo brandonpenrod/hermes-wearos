@@ -60,13 +60,15 @@ class HermesApi(
             })?.takeIf { it.isNotEmpty() } ?: listOf("approve", "deny")
     }
 
-    private fun request(url: String, body: String? = null, headers: Map<String, String> = emptyMap()): Request =
-        Request.Builder()
+    private fun request(url: String, body: String? = null, headers: Map<String, String> = emptyMap()): Request {
+        TailnetRoute.requireSafeGatewayUrl(url)
+        return Request.Builder()
             .url(url)
             .method(if (body == null) "GET" else "POST", body?.toRequestBody(JSON_MEDIA))
             .header("Authorization", "Bearer $token")
             .apply { headers.forEach { (k, v) -> header(k, v) } }
             .build()
+    }
 
     private fun esc(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
         .replace("\n", "\\n").replace("\r", "").replace("\t", "\\t") + "\""

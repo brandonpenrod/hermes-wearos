@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import dev.hermes.wearos.domain.FontScale
 import dev.hermes.wearos.domain.TtsConfig
@@ -109,16 +110,28 @@ class AppSettings(private val context: Context) {
         private val KEY_SPLASH_VIDEO_URI = stringPreferencesKey("splash_video_uri")
     }
 
+    private suspend fun protectedRead(key: Preferences.Key<String>): String {
+        val stored = context.dataStore.data.first()[key] ?: return ""
+        if (DeviceSecretBox.isEncrypted(stored)) return DeviceSecretBox.decrypt(stored)
+        // Upgrade old plaintext in place; do not discard it if Keystore encryption fails.
+        protectedWrite(key, stored)
+        return stored
+    }
+
+    private suspend fun protectedWrite(key: Preferences.Key<String>, value: String) {
+        context.dataStore.edit { it[key] = DeviceSecretBox.encrypt(value) }
+    }
+
     suspend fun baseUrl(): String = context.dataStore.data.first()[KEY_BASE_URL] ?: DEFAULT_BASE_URL
-    suspend fun token(): String = context.dataStore.data.first()[KEY_TOKEN] ?: ""
+    suspend fun token(): String = protectedRead(KEY_TOKEN)
     suspend fun sessionId(): String = context.dataStore.data.first()[KEY_SESSION_ID] ?: ""
     suspend fun lastRun(): String = context.dataStore.data.first()[KEY_LAST_RUN] ?: ""
 
     // EMBEDDED TAILNET accessors (SPEC §11.4).
-    suspend fun tailnetKey(): String = context.dataStore.data.first()[KEY_TAILNET_KEY] ?: ""
+    suspend fun tailnetKey(): String = protectedRead(KEY_TAILNET_KEY)
     suspend fun tailnetHostname(): String = context.dataStore.data.first()[KEY_TAILNET_HOSTNAME] ?: DEFAULT_TAILNET_HOSTNAME
     suspend fun tailnetEnabled(): Boolean = context.dataStore.data.first()[KEY_TAILNET_ENABLED] ?: true
-    suspend fun setTailnetKey(v: String) { context.dataStore.edit { it[KEY_TAILNET_KEY] = v.trim() } }
+    suspend fun setTailnetKey(v: String) { protectedWrite(KEY_TAILNET_KEY, v.trim()) }
     suspend fun setTailnetHostname(v: String) {
         context.dataStore.edit { it[KEY_TAILNET_HOSTNAME] = v.trim().ifEmpty { DEFAULT_TAILNET_HOSTNAME } }
     }
@@ -139,7 +152,7 @@ class AppSettings(private val context: Context) {
         if (foldRegistry && list.isNotEmpty()) {
             val sel = selectedGatewayId().ifEmpty { list.first().id }
             val folded = GatewayModel.foldBaseUrl(list, sel, t)
-            context.dataStore.edit { it[KEY_GATEWAYS] = GatewayModel.encode(folded) }
+            context.dataStore.edit { it[KEY_GATEWAYS] = DeviceSecretBox.encrypt(GatewayModel.encode(folded)) }
             gatewaysCache = folded
         }
     }
@@ -187,8 +200,8 @@ class AppSettings(private val context: Context) {
     }
 
     /** Agent switcher list cache (watchkit GET /agents, raw `{"agents":[…]}` JSON). */
-    suspend fun agentsCache(): String = context.dataStore.data.first()[KEY_AGENTS_CACHE] ?: ""
-    suspend fun setAgentsCache(v: String) = context.dataStore.edit { it[KEY_AGENTS_CACHE] = v }.let { }
+    suspend fun agentsCache(): String = protectedRead(KEY_AGENTS_CACHE)
+    suspend fun setAgentsCache(v: String) = protectedWrite(KEY_AGENTS_CACHE, v)
 
     /** Gateway `/api/sessions` cache — raw body + fetch time for the offline-readable sessions screen. */
     suspend fun sessionsCache(): Pair<String, Long> = context.dataStore.data.first().let {
@@ -199,12 +212,12 @@ class AppSettings(private val context: Context) {
     }.let { }
 
     suspend fun setToken(v: String) {
-        context.dataStore.edit { it[KEY_TOKEN] = v.trim() }
+        context.dataStore.edit { it[KEY_TOKEN] = DeviceSecretBox.encrypt(v.trim()) }
         val list = gateways()
         if (list.isNotEmpty()) {
             val sel = selectedGatewayId().ifEmpty { list.first().id }
             val folded = GatewayModel.foldToken(list, sel, v)
-            context.dataStore.edit { it[KEY_GATEWAYS] = GatewayModel.encode(folded) }
+            context.dataStore.edit { it[KEY_GATEWAYS] = DeviceSecretBox.encrypt(GatewayModel.encode(folded)) }
             gatewaysCache = folded
         }
     }
@@ -551,9 +564,9 @@ class AppSettings(private val context: Context) {
         _mediaAudioKbps.value = k
     }
 
-    suspend fun watchkitToken(): String = context.dataStore.data.first()[KEY_WATCHKIT_TOKEN] ?: ""
+    suspend fun watchkitToken(): String = protectedRead(KEY_WATCHKIT_TOKEN)
     suspend fun setMermaidBaseUrl(v: String) = context.dataStore.edit { it[KEY_WATCHKIT_URL] = v.trim().trimEnd('/') }.let { }
-    suspend fun setWatchkitToken(v: String) = context.dataStore.edit { it[KEY_WATCHKIT_TOKEN] = v.trim() }.let { }
+    suspend fun setWatchkitToken(v: String) = protectedWrite(KEY_WATCHKIT_TOKEN, v.trim())
 
     // ─── GATEWAY REGISTRY (owner epic, SPEC §11) ───────────────────────────────────────────
     // The registry (gateways_json + gateway_selected) is the source of truth; the legacy keys
@@ -571,7 +584,7 @@ class AppSettings(private val context: Context) {
     @Volatile private var gatewaysCache: List<Gateway> = emptyList()
 
     suspend fun gateways(): List<Gateway> {
-        val raw = context.dataStore.data.first()[KEY_GATEWAYS].orEmpty()
+        val raw = protectedRead(KEY_GATEWAYS)
         val list = GatewayModel.decode(raw)
         if (list.isNotEmpty()) { gatewaysCache = list; return list }
         if (raw.isNotBlank() && gatewaysCache.isNotEmpty()) return gatewaysCache
@@ -579,12 +592,12 @@ class AppSettings(private val context: Context) {
     }
 
     suspend fun saveGateways(list: List<Gateway>) {
-        context.dataStore.edit { it[KEY_GATEWAYS] = GatewayModel.encode(list) }
+        context.dataStore.edit { it[KEY_GATEWAYS] = DeviceSecretBox.encrypt(GatewayModel.encode(list)) }
         gatewaysCache = list
     }
 
     suspend fun selectedGatewayId(): String = context.dataStore.data.first().let {
-        (it[KEY_GW_SELECTED].orEmpty()).ifEmpty { GatewayModel.decode(it[KEY_GATEWAYS].orEmpty()).firstOrNull()?.id ?: "" }
+        (it[KEY_GW_SELECTED].orEmpty()).ifEmpty { GatewayModel.decode(protectedRead(KEY_GATEWAYS)).firstOrNull()?.id ?: "" }
     }
 
     suspend fun setSelectedGatewayId(id: String) = context.dataStore.edit { it[KEY_GW_SELECTED] = id }.let { }
@@ -605,15 +618,15 @@ class AppSettings(private val context: Context) {
      */
     suspend fun ensureGateways(): Gateway? {
         val prefs = context.dataStore.data.first()
-        val raw = prefs[KEY_GATEWAYS].orEmpty()
+        val raw = protectedRead(KEY_GATEWAYS)
         val existing = GatewayModel.decode(raw)
         if (existing.isNotEmpty()) return existing.firstOrNull { it.id == (prefs[KEY_GW_SELECTED].orEmpty()) } ?: existing.first()
         if (raw.isNotBlank()) return gatewaysCache.firstOrNull()
         val (list, selected) = GatewayModel.migrate(
-            prefs[KEY_BASE_URL] ?: "", prefs[KEY_TOKEN] ?: "", prefs[KEY_WATCHKIT_URL] ?: "",
+            prefs[KEY_BASE_URL] ?: "", protectedRead(KEY_TOKEN), prefs[KEY_WATCHKIT_URL] ?: "",
         )
         context.dataStore.edit {
-            it[KEY_GATEWAYS] = GatewayModel.encode(list)
+            it[KEY_GATEWAYS] = DeviceSecretBox.encrypt(GatewayModel.encode(list))
             it[KEY_GW_SELECTED] = selected
         }
         gatewaysCache = list
@@ -624,7 +637,7 @@ class AppSettings(private val context: Context) {
     suspend fun saveGateway(gw: Gateway, select: Boolean = false): List<Gateway> {
         val list = GatewayModel.upsert(gateways(), gw)
         context.dataStore.edit {
-            it[KEY_GATEWAYS] = GatewayModel.encode(list)
+            it[KEY_GATEWAYS] = DeviceSecretBox.encrypt(GatewayModel.encode(list))
             if (select) it[KEY_GW_SELECTED] = gw.id
         }
         gatewaysCache = list
@@ -637,7 +650,7 @@ class AppSettings(private val context: Context) {
         val next = GatewayModel.remove(list, id)
         val selected = GatewayModel.selectedAfterRemove(selectedGatewayId(), list, id)
         context.dataStore.edit {
-            it[KEY_GATEWAYS] = GatewayModel.encode(next)
+            it[KEY_GATEWAYS] = DeviceSecretBox.encrypt(GatewayModel.encode(next))
             it[KEY_GW_SELECTED] = selected
         }
         gatewaysCache = next
@@ -650,7 +663,7 @@ class AppSettings(private val context: Context) {
         if (list.isEmpty()) return
         val folded = GatewayModel.foldWatchkit(list, selectedGatewayId(), url)
         if (folded === list) return
-        context.dataStore.edit { it[KEY_GATEWAYS] = GatewayModel.encode(folded) }
+        context.dataStore.edit { it[KEY_GATEWAYS] = DeviceSecretBox.encrypt(GatewayModel.encode(folded)) }
         gatewaysCache = folded
     }
 
@@ -666,7 +679,7 @@ class AppSettings(private val context: Context) {
         context.dataStore.edit {
             it[KEY_BASE_URL] = base
             if (watchkitEndpoint.isNotEmpty()) it[KEY_WATCHKIT_URL] = watchkitEndpoint
-            if (token != null) it[KEY_TOKEN] = token.trim()
+            if (token != null) it[KEY_TOKEN] = DeviceSecretBox.encrypt(token.trim())
         }
     }
 

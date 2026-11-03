@@ -83,8 +83,10 @@ try {
   console.error(`watchkit: config.json unreadable (${e.message}) — continuing on WATCHKIT_TOKEN env`);
 }
 const TOKEN = process.env.WATCHKIT_TOKEN || cfg.token || '';
-if (!TOKEN) { console.error('watchkit: empty token in config'); process.exit(2); }
-const HOST = process.env.WATCHKIT_HOST || cfg.host || '127.0.0.1'; // bind: set your LAN/tailnet IP in config.json
+if (TOKEN.length < 64 || !/^[a-f0-9]{64,}$/i.test(TOKEN)) { console.error('watchkit: bearer token must be at least 32 random bytes as hex'); process.exit(2); }
+const HOST = process.env.WATCHKIT_HOST || cfg.host || '127.0.0.1';
+function isLoopbackHost(host) { return ['127.0.0.1', '::1', 'localhost'].includes(host); }
+if (!isLoopbackHost(HOST)) { console.error('watchkit: pilot binds loopback only'); process.exit(2); }
 const PORT = Number(process.env.WATCHKIT_PORT || cfg.port || 42651);
 // Stdio MCP mode (`node watchkit.mjs mcp`): stdout is reserved for JSON-RPC; logs go to stderr.
 const MCP_MODE = process.argv.slice(2).includes('mcp');
@@ -123,21 +125,8 @@ const CHILD_ENV = {
 // ── agents (profile discovery for the watch's agent switcher) ──────────────
 // Same answer the desktop sidebar gives: the multiplexed `default` home + every profiles/<name>/
 // that has a config.yaml (a half-created dir is not an agent). Read-only directory scan.
-const PROFILES_DIR = process.env.WATCHKIT_PROFILES || cfg.profiles_dir || path.join(os.homedir(), '.hermes', 'profiles');
-
-function listAgents() {
-  const agents = ['default'];
-  let names = [];
-  try { names = fs.readdirSync(PROFILES_DIR); } catch { /* profiles dir missing: default only */ }
-  for (const name of names.sort()) {
-    if (name.startsWith('.')) continue; // dot-dirs are staging/temp scaffolding, not agents
-    try {
-      const dir = path.join(PROFILES_DIR, name);
-      if (fs.statSync(dir).isDirectory() && fs.existsSync(path.join(dir, 'config.yaml'))) agents.push(name);
-    } catch { /* vanished mid-scan / unreadable — skip */ }
-  }
-  return agents;
-}
+const PILOT_PROFILE = 'default';
+const PROFILES_DIR = cfg.profile_dir || ''; // explicit isolated store only; no implicit home/profile discovery
 
 // ── command catalog (the watch's ⌘ / 6:00 dial overlay) ────────────────────
 // The watch's slash overlay must never pretend the Runs API dispatches slash commands (it does
@@ -218,85 +207,6 @@ async function handleCatalog(req, res, ip, params) {
   return done(res, send(res, 200, body), Date.now(), ip, 'catalog', 200, undefined, rows.length);
 }
 
-// ── agent keys (the multi-agent 401 fix, SPEC §12.2) ──────────────────────
-// A multiplexed Hermes gateway resolves API_SERVER_KEY PER PROFILE from the URL and fails CLOSED
-// for a named profile that has none: the wear token is a 401 on /p/research while /v1/health
-// (unauthenticated) keeps answering 200 — so the watch's Test button and endpoint failover both
-// look healthy for an agent that can do nothing. watchkit is the only component that can see the
-// truth, because it runs on the gateway box and reads the profile dotfiles:
-//   profiles/<p>/.env   → API_SERVER_KEY for <p>       (absent ⇒ that agent needs a key typed)
-//   ~/.env (or the home profile) → API_SERVER_KEY for `default`
-// Response (bearer-protected, tailnet/LAN-only port like every other route):
-//   {"agents":[{"profile":"wear","has_key":true,"key":"…"},{"profile":"research","has_key":false}],
-//    "source":{"default":"home-env"}}
-// Returning the KEYS is deliberate: this port is not public, the watch needs them to sign requests
-// per profile, and "switch agent, get a 401, type 64 hex chars on a watch" is not a workflow.
-// `has_key:false` is the honest answer the UI shows instead of a mystery error.
-function readEnvKey(file) {
-  try {
-    const txt = fs.readFileSync(file, 'utf8');
-    const m = /^API_SERVER_KEY=["']?([^"'\n]+)["']?$/m.exec(txt);
-    return m ? m[1].trim() : '';
-  } catch { return ''; }
-}
-
-function agentKeys() {
-  const out = [];
-  // The `default` profile's env is the HERMES_HOME one (~/.hermes/.env) — same rule openStore
-  // uses for its state.db. `~/.env` was a wrong guess: it made the biggest store report no key.
-  const homeKey = readEnvKey(path.join(HERMES_HOME, '.env'));
-  for (const profile of listAgents()) {
-    const key = profile === 'default'
-      ? (readEnvKey(path.join(PROFILES_DIR, 'default', '.env')) || homeKey)
-      : readEnvKey(path.join(PROFILES_DIR, profile, '.env'));
-    out.push({ profile, has_key: !!key, key });
-  }
-  return out;
-}
-
-async function handleAgentKeys(req, res, ip) {
-  seedProfileKeys(true); // a LEARN is the moment new agents should join the map (owner below)
-  const agents = agentKeys();
-  const withKey = agents.filter((a) => a.has_key).length;
-  const body = JSON.stringify({ agents, source: 'profiles-env' });
-  return done(res, send(res, 200, body), Date.now(), ip, 'agent_keys', 200, undefined, withKey);
-}
-
-/**
- * AUTO-KEY NEW AGENTS (owner 2026-11-02: "two new agents had no keys and Learn said none —
- * watchkit should look for new agents and get that key in there"). Agents created AFTER first
- * setup carry no `API_SERVER_KEY` in their profile .env, and the gateway fails CLOSED for a
- * keyless named profile (SPEC §12.2) — while the one-login convention says the default profile's
- * key (read from ~/.hermes/.env) is THE key on this box. So: append it to every keyless profile,
- * exactly the `scripts/setup.sh --agent-keys` recipe, but automatic. `force` = a Learn request
- * always sweeps; otherwise the away-sweep poll (every 20 s) throttles this to once a minute —
- * new agents are keyed within a minute of appearing, with no human step. Never logs key values;
- * append-only, and a missing .env is created (0600 like its siblings).
- */
-let lastKeySeedMs = 0;
-function seedProfileKeys(force = false) {
-  const now = Date.now();
-  if (!force && now - lastKeySeedMs < 60_000) return [];
-  lastKeySeedMs = now;
-  const homeKey = readEnvKey(path.join(HERMES_HOME, '.env'));
-  if (!homeKey) return [];
-  const seeded = [];
-  for (const profile of listAgents()) {
-    if (profile === 'default') continue; // default resolves ~/.hermes/.env directly in agentKeys()
-    const envPath = path.join(PROFILES_DIR, profile, '.env');
-    try {
-      if (readEnvKey(envPath)) continue;
-      let body = '';
-      try { body = fs.readFileSync(envPath, 'utf8'); } catch { /* no .env yet — one gets made */ }
-      const glue = body && !body.endsWith('\n') ? '\n' : ''; // never glue onto a newline-less tail
-      fs.appendFileSync(envPath, `${glue}API_SERVER_KEY=${homeKey}\n`, { mode: 0o600 });
-      seeded.push(profile);
-    } catch { /* vanished profile / read-only fs — that agent just stays keyless this round */ }
-  }
-  if (seeded.length) logLine({ ev: 'agent_keys_seeded', profiles: seeded });
-  return seeded;
-}
-
 // ── /search (session search over the profile's FTS index, SPEC §12.4) ───────
 // The owner's Sessions screen ask: "new session plus a tap-to-search box" — searchable across
 // every chat this agent ever had, not just the 20 rows /sessions lists. The store already carries
@@ -326,7 +236,8 @@ function ftsQuery(q) {
 
 async function handleSearch(req, res, ip, params) {
   const t0 = Date.now();
-  const profile = String(params.profile ?? 'default').trim() || 'default';
+  const profile = String(params.profile ?? PILOT_PROFILE).trim() || PILOT_PROFILE;
+  if (profile !== PILOT_PROFILE) return null;
   const q = String(params.q ?? '').trim().slice(0, 96);
   const limit = Math.min(SEARCH_LIMIT_MAX, Math.max(1, Number(params.limit) || 8));
   if (!SESSIONS_PROFILE_RE.test(profile))
@@ -779,52 +690,6 @@ function extractMultipartFile(buf, contentType, name) {
 // ── /render/mermaid ────────────────────────────────────────────────────────
 /** Graphviz-ish `digraph{a->b}` (what the dev render_test sends) isn't a diagram type in
  *  mermaid-cli — rewrite a single-statement digraph into `flowchart TD` edges. */
-function normalizeMermaid(code) {
-  const m = /^\s*digraph\s*\w*\s*\{([\s\S]*)\}\s*$/.exec(code);
-  if (!m) return code;
-  const edges = m[1].split(/[;\n]+/).map(s => s.trim()).filter(Boolean)
-    .map(e => '  ' + e.replace(/-{1,2}>/g, '-->'));
-  return edges.length ? ['flowchart TD', ...edges].join('\n') : code;
-}
-
-async function handleRender(req, res, ip) {
-  const t0 = Date.now();
-  let body;
-  try { body = JSON.parse((await readBody(req, JSON_MAX_BYTES)).toString('utf8')); }
-  catch (e) { return done(res, sendErr(res, e.status || 400, e.status ? 'body >1MB' : 'invalid JSON body'), t0, ip, 'render', e.status || 400); }
-  const code = typeof body.code === 'string' ? normalizeMermaid(body.code.trim()) : '';
-  if (!code) return done(res, sendErr(res, 400, 'missing "code"'), t0, ip, 'render', 400);
-  const width = Math.min(1200, Math.max(100, Number(body.width) || 460));
-  // mmdc v12 outputs png/svg/pdf only — png it is (no webp).
-  const key = sha256(`${code}|${width}`);
-  const cachePath = path.join(CACHE_DIR, `${key}.png`);
-
-  if (fs.existsSync(cachePath)) {
-    const img = fs.readFileSync(cachePath);
-    return done(res, send(res, 200, img, { 'Content-Type': 'image/png', 'X-Cache': 'hit' }), t0, ip, 'render', 200, 'hit', img.length);
-  }
-
-  const dir = fs.mkdtempSync(path.join(TMP_DIR, 'render-'));
-  try {
-    const inFile = path.join(dir, 'diagram.mmd');
-    const outFile = path.join(dir, 'diagram.png');
-    await fsp.writeFile(inFile, code + '\n');
-    const r = await runChild('npx', ['-y', '@mermaid-js/mermaid-cli', '-i', inFile, '-o', outFile,
-      '--size', String(width), '-s', '2', '-p', PUPPETEER_CFG],
-      { cwd: dir, env: CHILD_ENV, timeout: RENDER_TIMEOUT_MS });
-    if (r.code !== 0 || !fs.existsSync(outFile)) {
-      const excerpt = (r.err || 'mmdc produced no output').slice(-1200);
-      const status = r.killed ? 504 : 400; // timeout vs mermaid parse/render error
-      return done(res, sendErr(res, status, r.killed ? 'render timeout (60s)' : excerpt), t0, ip, 'render', status, 'miss');
-    }
-    await fsp.rename(outFile, cachePath); // same fs (.cache) — atomic
-    const img = await fsp.readFile(cachePath);
-    return done(res, send(res, 200, img, { 'Content-Type': 'image/png', 'X-Cache': 'miss' }), t0, ip, 'render', 200, 'miss', img.length);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 // ── /img ─────────────────────────────────────────────────────────────────────
 // Image scaler (F6): the gateway emits `![desc](/abs/path.png)` lines and the watch fetches
 // them here. Boundaries: the extension whitelist (only image types, never .env/.py/…), the
@@ -846,16 +711,8 @@ const IMG_FULL_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'ima
 const IMG_SCALER = path.join(WK_DIR, 'img_scale.py');
 // Mounted drives (owner 2026-11-02: a DESKTOP session's figure under /run/media/<user>/dev 403'd
 // — agents write media wherever their repo lives, and mounts are not all under home). Linux's
-// auto-mount point /run/media/<user> (and the /mnt/<user> variant) is an implicit root when it
-// exists: everything on the user's own drives is exactly as trusted as $HOME itself — same
-// bearer, read-only, and /media//sessions already expose more. cfg.img_roots covers any other.
-const MOUNT_PARENTS = [os.userInfo().username]
-  .map((u) => [`/run/media/${u}`, `/mnt/${u}`])
-  .flat()
-  .filter((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
-const IMG_ROOTS = [os.homedir(), '/tmp', '/var/tmp',
-  ...MOUNT_PARENTS,
-  ...(Array.isArray(cfg.img_roots) ? cfg.img_roots : [])]
+// Media access is restricted to operator-listed roots; there are no implicit home/tmp/mount roots.
+const IMG_ROOTS = (Array.isArray(cfg.img_roots) ? cfg.img_roots : [])
   .map(r => { try { return fs.realpathSync(path.resolve(String(r))); } catch { return null; } })
   .filter(Boolean);
 const underRoots = (p) => IMG_ROOTS.some(root => p === root || p.startsWith(root + path.sep));
@@ -1256,8 +1113,6 @@ function parseToolCallNames(toolCallsJson) {
 
 async function handleApprovalsWaiting(req, res, ip) {
   const t0 = Date.now();
-  seedProfileKeys(false); // throttled auto-key sweep: brand-new agents join the key map within a
-  // minute of appearing, driven by the watch's own 20 s away-poll — no human step (owner 2026-11-02).
   const waiting = [];
   const pulses = [];
   let names = [];
@@ -1406,9 +1261,14 @@ const server = http.createServer(async (req, res) => {
       }));
     }
     const auth = req.headers.authorization || '';
+    const requestUrl = new URL(req.url || '/', 'http://watchkit');
+    if (requestUrl.searchParams.has('token')) return sendErr(res, 400, 'bearer tokens must use Authorization header');
+    if (requestUrl.searchParams.has('profile') && requestUrl.searchParams.get('profile') !== PILOT_PROFILE) return sendErr(res, 403, 'single-profile pilot');
     if (!auth.startsWith('Bearer ') || !timingSafeEqual(auth.slice(7), TOKEN)) {
       return done(res, sendErr(res, 401, 'unauthorized'), Date.now(), ip, url.slice(1), 401);
     }
+    const PILOT_READ_ONLY_DENY = new Set(['/search', '/catalog', '/approvals_waiting', '/sessions', '/session_messages']);
+    if (PILOT_READ_ONLY_DENY.has(url)) return sendErr(res, 403, 'disabled in isolated pilot');
     // ── body tools (W1-W8): snapshot ingest + latest + per-tool answers ──────
     if (req.method === 'POST' && url === '/health/snapshot') {
       const t0 = Date.now();
@@ -1436,28 +1296,19 @@ const server = http.createServer(async (req, res) => {
     // Agent switcher (watch bottom bar): gateway profiles. Bearer-auth like everything else.
     if (req.method === 'GET' && url === '/agents') {
       const t0 = Date.now();
-      const agents = listAgents();
-      return done(res, send(res, 200, JSON.stringify({ agents })), t0, ip, 'agents', 200, undefined, agents.length);
+      return done(res, send(res, 200, JSON.stringify({ agents: [PILOT_PROFILE] })), t0, ip, 'agents', 200);
     }
     // Cross-profile sessions for the watch's Sessions screen (owner: continue computer chats).
     // Session management for the watch's long-press menu (SPEC §12.4 follow-up): fork any session
     // into the current agent, delete any session. Bearer-guarded like every other route.
-    if (req.method === 'POST' && (url === '/session_fork' || url === '/session_delete' || url === '/session_archive' || url === '/session_promote')) {
-      let q;
-      try { q = JSON.parse((await readBody(req, JSON_MAX_BYTES)).toString('utf8')); }
-      catch { return done(res, sendErr(res, 400, 'bad json body'), Date.now(), ip, url.slice(1), 400); }
-      if (url === '/session_fork') return await handleSessionFork(req, res, ip, q);
-      if (url === '/session_archive') return await handleSessionArchive(req, res, ip, q);
-      if (url === '/session_promote') return await handleSessionPromote(req, res, ip, q);
-      return await handleSessionDelete(req, res, ip, q);
-    }
+    if (req.method === 'POST' && (url === '/session_fork' || url === '/session_delete' || url === '/session_archive' || url === '/session_promote')) return sendErr(res, 403, 'disabled in isolated pilot');
+
     // Full-text session search for the watch's Sessions screen (SPEC §12.4).
     if (req.method === 'GET' && url === '/search') {
       const q = Object.fromEntries(new URL(req.url, 'http://watchkit').searchParams);
       return await handleSearch(req, res, ip, q);
     }
     // Per-profile gateway keys so the watch can sign requests for ANY agent (SPEC §12.2).
-    if (req.method === 'GET' && url === '/agent_keys') return await handleAgentKeys(req, res, ip);
     // Slash-command catalog for the watch's ⌘ overlay (SPEC §12.3). Bearer like every endpoint.
     if (req.method === 'GET' && url === '/catalog') {
       const q = Object.fromEntries(new URL(req.url, 'http://watchkit').searchParams);
@@ -1473,22 +1324,25 @@ const server = http.createServer(async (req, res) => {
       const q = Object.fromEntries(new URL(req.url, 'http://watchkit').searchParams);
       return await handleSessionMessages(req, res, ip, q);
     }
+    if (req.method === 'GET' && url === '/img' && cfg.enable_images !== true) return sendErr(res, 403, 'disabled');
     if (req.method === 'GET' && url === '/img') {
       const q = Object.fromEntries(new URL(req.url, 'http://watchkit').searchParams);
       return await handleImg(req, res, ip, q);
     }
+    if (req.method === 'GET' && url === '/media' && cfg.enable_media !== true) return sendErr(res, 403, 'disabled');
     if (req.method === 'GET' && url === '/media') {
       const q = Object.fromEntries(new URL(req.url, 'http://watchkit').searchParams);
       return await handleMedia(req, res, ip, q);
     }
+    if (req.method === 'POST' && url === '/img' && cfg.enable_images !== true) return sendErr(res, 403, 'disabled');
     if (req.method === 'POST' && url === '/img') {
       let body;
       try { body = JSON.parse((await readBody(req, JSON_MAX_BYTES)).toString('utf8')); }
       catch (e) { return done(res, sendErr(res, e.status || 400, e.status ? 'body >1MB' : 'invalid JSON body'), Date.now(), ip, 'img', e.status || 400); }
       return await handleImg(req, res, ip, body && typeof body === 'object' ? body : {});
     }
-    if (req.method === 'POST' && url === '/render/mermaid') return await handleRender(req, res, ip);
-    if (req.method === 'POST' && url === '/stt/whisper') return await handleStt(req, res, ip);
+    if (req.method === 'POST' && url === '/render/mermaid') return sendErr(res, 403, 'disabled');
+    if (req.method === 'POST' && url === '/stt/whisper') return cfg.enable_stt === true ? await handleStt(req, res, ip) : sendErr(res, 403, 'disabled');
     return done(res, sendErr(res, 404, 'not found'), Date.now(), ip, url.slice(1), 404);
   } catch (e) {
     logLine({ ev: 'req', ip, ep: url, status: 500, ms: 0, err: String(e?.message || e) });
@@ -1592,16 +1446,13 @@ if (MCP_MODE) {
   runMcp();
 } else {
   // BATCH-4 #9: streamed mic sessions ride the same socket authority as every endpoint.
-  attachSttStream(server, {
+  if (cfg.enable_stt === true) attachSttStream(server, {
     cfg, venvPy: VENV_PY, wkDir: WK_DIR, TOKEN, CHILD_ENV, logLine,
     ffmpeg: FFMPEG, // mic lanes arrive as Ogg/Opus or ADTS AAC → ffmpeg demuxes to engine PCM
     timingSafe: (a, b) => timingSafeEqual(a, b),
   });
   server.listen(PORT, HOST, () => {
     logLine({ ev: 'start', version: VERSION, host: HOST, port: PORT, pid: process.pid });
-    // AUTO-KEY NEW AGENTS without waiting for any watch poll (owner 2026-11-02): own timer, same
-    // throttled sweep the away-poll drives. unref() so it never keeps the process alive on its own.
-    setInterval(() => { try { seedProfileKeys(false); } catch { /* next round */ } }, 60_000).unref();
   });
   for (const s of ['SIGTERM', 'SIGINT']) process.on(s, () => {
     logLine({ ev: 'stop', sig: s });
