@@ -41,7 +41,7 @@ jobs:
           gomobile bind -v -trimpath -tags=version_android -ldflags='-s -w' -target=android/arm,android/amd64 -androidapi=30 -o ../../app/libs/hermes-tailnet.aar .
       - name: Host security regression tests
         run: |
-          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          python3 -m unittest discover -s app/security-tests -p 'test_*.py' -v
           if [ -d server/watchkit/test ]; then node --test server/watchkit/test/*.test.mjs; fi
       - name: JVM tests and non-debuggable release build
         run: gradle --no-daemon --max-workers=2 testDebugUnitTest assembleRelease
