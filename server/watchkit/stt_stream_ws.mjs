@@ -1,7 +1,7 @@
 /**
  * stt_stream_ws.mjs — BATCH-4 #9: the watch streams raw mic PCM to the gateway.
  *
- *   WS /stt/stream (bearer, same token as every watchkit endpoint — header or ?token=)
+ *   WS /stt/stream (bearer in Authorization header only; query tokens are forbidden)
  *     client → server : BINARY frames = mic audio, format SNIFFED from the first bytes:
  *                        'OggS…'  → Ogg/Opus (current watch: 24 kbit/s, the best speech codec)
  *                        ADTS     → AAC-LC 32k (watch without an Opus encoder)
@@ -80,7 +80,8 @@ export function attachSttStream(server, ctx) {
     if (url !== '/stt/stream') { socket.destroy(); return; }
     const q = new URLSearchParams((req.url || '').split('?')[1] || '');
     const auth = req.headers.authorization || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : q.get('token') || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    if (q.has('token')) { socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
     const tOk = ctx.timingSafe(token, ctx.TOKEN);
     const key = req.headers['sec-websocket-key'];
     if (!tOk || !key || req.headers.upgrade?.toLowerCase() !== 'websocket') {
