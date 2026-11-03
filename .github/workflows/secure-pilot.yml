@@ -48,6 +48,16 @@ jobs:
           if [ -d server/watchkit/test ]; then node --test server/watchkit/test/*.test.mjs; fi
       - name: JVM tests and non-debuggable release build
         run: gradle --no-daemon --max-workers=2 testDebugUnitTest assembleRelease
+      - name: Upload test and lint evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: test-and-lint-evidence
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Sign disposable pilot APK and record provenance
         shell: bash
         run: |
